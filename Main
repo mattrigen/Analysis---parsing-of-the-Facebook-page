@@ -1,0 +1,113 @@
+using System.Collections.Concurrent;
+using HtmlAgilityPack;
+
+internal class Program
+{
+    private static void Main(string[] args)
+    {
+        Page startPage = new Page { Url = "Management" };
+        string targetUrl = "Organization";
+        List<string> path = GraphSearch.FindRoute(startPage, targetUrl);
+        if (path != null)
+        {
+            Console.WriteLine("Path found:");
+            foreach (string url in path)
+            {
+                Console.WriteLine(url);
+            }
+        }
+        else
+        {
+            Console.WriteLine("No path found.");
+        }
+        Console.ReadLine();
+    }
+}
+class Page
+{
+    public Page? Parent { get; set; } = null;
+    public string Url { get; set; }
+    public List<Page> GetPages()
+    {
+        using (var client = new HttpClient())
+        {
+            string html;
+            try
+            {
+                html = client.GetStringAsync("https://en.wikipedia.org/wiki/" + Url).Result;
+            }
+            catch (Exception)
+            {
+                return new List<Page>();
+            }
+            var document = new HtmlDocument();
+            document.LoadHtml(html);
+            var div = document.DocumentNode.SelectSingleNode("//*[@id=\"mw-content-text\"]/div[1]");
+            var links = div.Descendants("a")
+                   .Select(a => a.GetAttributeValue<string>("href", ""))
+                   .Select(l => l.Contains("wiki/") ? l.Split("/")[2] : "")
+                   .ToList()
+                   .Take(50)
+                   .Select(link => new Page() { Url = link, Parent = this })
+                   .ToList();
+            return links;
+        }
+    }
+    public List<string> GetPath()
+    {
+        return Parent != null ? Parent.GetPath().Concat(new List<string> { Url }).ToList() : new List<string> { Url };
+    }
+    public override string ToString()
+    {
+        return $"{Url}";
+    }
+}
+class GraphSearch
+{
+    public static List<string>? FindRoute(Page startPage, string targetUrl)
+    {
+        // Use a concurrent queue for thread-safe enqueue and dequeue operations
+        ConcurrentQueue<Page?> queue = new ConcurrentQueue<Page?>();
+        queue.Enqueue(startPage);
+        // Use a concurrent dictionary for thread-safe access to visited pages
+        var visited = new ConcurrentDictionary<Page, Page>();
+
+        while (!queue.IsEmpty)
+        {
+            var currentPage = queue.TryDequeue(out var page) ? page : null;
+
+            // Check if the target page is found
+            if (currentPage?.Url == targetUrl)
+            {
+                return BuildPath(currentPage);
+            }
+            // Get child pages asynchronously
+            var childPages = currentPage?.GetPages();
+
+            // Enqueue unvisited child pages
+            if (childPages != null)
+            {
+                foreach (var childPage in childPages)
+                {
+                    if (!visited.ContainsKey(childPage))
+                    {
+                        visited[childPage] = currentPage;
+                        queue.Enqueue(childPage);
+                    }
+                }
+            }
+        }
+        // Target page not found
+        return null;
+    }
+    private static List<string> BuildPath(Page currentPage)
+    {
+        var path = new List<string>();
+        while (currentPage != null)
+        {
+            path.Insert(0, currentPage.Url);
+            currentPage = currentPage.Parent;
+        }
+        return path;
+    }
+}
